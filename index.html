@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalCut</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<script src="coi-serviceworker.js"></script>
+<script src="lib/ffmpeg.js"></script>
+<script src="lib/ffmpeg-util.js"></script>
+<script src="lib/marked.js"></script>
+<style>
+    :root {
+        --bg: #09090b;
+        --panel: #18181b;
+        --border: #27272a;
+        --text: #a1a1aa;
+        --text-bright: #e4e4e7;
+        --accent: #3b82f6;
+        --accent-hover: #2563eb;
+        --danger: #9f1239;
+        --success: #166534;
+        --input-bg: #121214;
+    }
+    * { box-sizing: border-box; }
+    body { 
+        background: var(--bg); color: var(--text); 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+        font-size: 13px;
+    }
+
+    /* UTILS */
+    .btn { 
+        background: var(--panel); color: var(--text-bright); border: 1px solid var(--border); 
+        padding: 6px 12px; cursor: pointer; border-radius: 6px; font-weight: 500; transition: 0.2s; 
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:hover { background: var(--border); color: #fff; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+
+    /* KEYBOARD HINT BADGE */
+    .kbd {
+        background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px; padding: 0 4px; font-family: monospace; font-size: 10px;
+        color: rgba(255,255,255,0.7); min-width: 18px; text-align: center;
+    }
+
+    /* LAYOUT */
+    .hud { 
+        background: var(--bg); padding: 8px 15px; display: flex; gap: 12px; align-items: center; 
+        border-bottom: 1px solid var(--border); flex-shrink: 0; height: 50px;
+    }
+    .stat { font-family: 'SF Mono', Consolas, monospace; color: var(--accent); min-width: 60px; text-align: center; }
+    .sep { width: 1px; height: 20px; background: var(--border); margin: 0 5px; }
+
+    .vid-container { flex: 1; min-height: 0; background: #000; display: flex; flex-direction: column; justify-content: center; position: relative; }
+    video { width: 100%; height: 100%; object-fit: contain; outline: none; }
+
+    /* EDITOR PANEL */
+    #editor { 
+        background: var(--bg); border-top: 1px solid var(--border); 
+        display: flex; flex-direction: column; max-height: 40vh; height: auto; flex-shrink: 0; 
+    }
+    .sec-header { 
+        padding: 8px 15px; background: var(--panel); border-bottom: 1px solid var(--border); 
+        display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: var(--text-bright);
+    }
+    .sec-list { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+
+    /* ROWS */
+    .sec-row { 
+        display: flex; gap: 8px; align-items: center; background: var(--panel); 
+        padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; flex-wrap: wrap;
+    }
+    .sec-row.draft { 
+        background: rgba(59, 130, 246, 0.05); border: 1px dashed var(--border); 
+        margin-top: 4px; 
+    }
+    
+    /* INPUT GROUPS */
+    .t-grp { 
+        display: inline-flex; background: #111; border: 1px solid #333; 
+        border-radius: 3px; align-items: center; overflow: hidden; height: 26px; 
+    }
+    .t-btn { 
+        background: transparent; border: none; color: #777; width: 28px; height: 100%; 
+        cursor: pointer; display: grid; place-items: center; padding: 0; transition: 0.1s;
+        border-right: 1px solid #222;
+    }
+    .t-btn:last-child { border-right: none; }
+    .t-btn:hover { background: #222; color: #fff; }
+    .t-btn.btn-play { color: #4ade80; } 
+    .t-btn.btn-play:hover { color: #86efac; }
+    .t-btn.active-icon { color: var(--accent); }
+
+    .t-input { 
+        background: #111; border: none; color: #8f8; 
+        padding: 0 4px; width: 60px; height: 100%; 
+        font-family: monospace; font-size: 12px; text-align: center; 
+        -moz-appearance: textfield; 
+    }
+    .t-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .t-input:focus { outline: none; background: #000; color: #fff; }
+
+    .name-input { 
+        background: var(--input-bg); border: 1px solid var(--border); color: var(--text-bright); 
+        padding: 0 8px; border-radius: 5px; height: 26px; width: 80px; font-size: 12px;
+    }
+    .name-input:focus { border-color: var(--accent); outline: none; }
+
+    .act-btn { 
+        width: 26px; height: 26px; border-radius: 5px; border: none; cursor: pointer; 
+        display: grid; place-items: center; color: #fff; margin-left: auto; transition: 0.2s;
+    }
+    .act-add { background: var(--success); }
+    .act-add:hover { background: #15803d; }
+    .act-del { background: transparent; color: #666; }
+    .act-del:hover { background: var(--danger); color: #fff; }
+
+    /* OVERLAYS */
+    #drop { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; place-items: center; z-index: 50; backdrop-filter: blur(5px); }
+    #drop h1 { border: 2px dashed #555; padding: 50px; color: #fff; border-radius: 10px; font-weight: 300; }
+
+    #log-overlay {
+        position: absolute; bottom: 20px; right: 20px; background: var(--panel);
+        border: 1px solid var(--border); padding: 15px; border-radius: 8px;
+        width: 450px; display: none; z-index: 40; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    #log-content { font-family: monospace; font-size: 11px; color: #aaa; max-height: 200px; overflow-y: auto; margin-bottom: 10px; white-space: pre-wrap; }
+
+    #settings-overlay {
+        position: absolute; top: 60px; right: 20px; background: var(--panel);
+        border: 1px solid var(--border); padding: 15px; border-radius: 8px;
+        width: 250px; display: none; z-index: 45; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12px; }
+    .setting-row label { color: var(--text-bright); }
+    .setting-row select, .setting-row input { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 4px; border-radius: 4px; }
+    .setting-row input[type="checkbox"] { width: auto; }
+
+    #help-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; place-items: center; z-index: 60; backdrop-filter: blur(5px);
+    }
+    #help-content {
+        background: var(--bg); width: 600px; max-width: 90vw; max-height: 80vh;
+        border: 1px solid var(--border); border-radius: 8px; padding: 25px;
+        overflow-y: auto; color: var(--text-bright);
+    }
+    #help-content h1, #help-content h2 { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-top: 0; }
+    #help-content pre { background: #111; padding: 10px; border-radius: 4px; overflow-x: auto; }
+
+    #toast {
+        position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+        background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 20px;
+        font-weight: 600; font-size: 12px; pointer-events: none; opacity: 0; transition: 0.3s; z-index: 100;
+    }
+    #toast.show { opacity: 1; bottom: 90px; }
+</style>
+</head>
+<body>
+
+<div id="drop"><h1>Drop Video File</h1></div>
+<div id="toast"></div>
+
+<div id="help-overlay" onclick="if(event.target===this) this.style.display='none'">
+    <div id="help-content"></div>
+</div>
+
+<div id="log-overlay">
+    <div style="font-weight:600; color:#fff; margin-bottom:5px">Output</div>
+    <div id="log-content"></div>
+    <div style="display:flex; gap:10px; justify-content: flex-end;">
+        <button class="btn" onclick="document.getElementById('log-overlay').style.display='none'">Close</button>
+        <button class="btn btn-primary" id="copy-btn" onclick="copyLog()">Copy Command</button>
+    </div>
+</div>
+
+<div id="settings-overlay">
+    <div style="font-weight:600; color:#fff; margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:5px;">FFmpeg Options</div>
+    
+    <div class="setting-row">
+        <label>Rotation</label>
+        <select id="opt-rot" onchange="updateSettings()">
+            <option value="0">0°</option>
+            <option value="90">90° CW</option>
+            <option value="180">180°</option>
+            <option value="270">90° CCW</option>
+        </select>
+    </div>
+
+    <div class="setting-row">
+        <div style="display:flex; flex-direction:column;">
+            <label title="Constant Rate Factor">Quality (CRF)</label>
+            <span style="font-size:9px; color:#666;">18=High, 23=Default, 28=Low</span>
+        </div>
+        <input type="number" id="opt-crf" value="23" min="0" max="51" style="width:50px" onchange="updateSettings()">
+    </div>
+
+    <div class="setting-row">
+        <label>Scale (Multiplier)</label>
+        <input type="number" id="opt-scale" value="1.0" step="0.1" min="0.1" style="width:50px" onchange="updateSettings()">
+    </div>
+
+    <div class="setting-row">
+        <label>Keep Metadata</label>
+        <input type="checkbox" id="opt-meta" checked onchange="updateSettings()">
+    </div>
+
+    <div style="margin-top:10px; padding-top:10px; border-top:1px solid #333;">
+        <div class="setting-row">
+            <label title="Generate command with NVENC flags">CUDA (Cmd Only)</label>
+            <input type="checkbox" id="opt-cuda" onchange="updateSettings()">
+        </div>
+    </div>
+    
+    <div style="text-align:right; margin-top:10px;">
+        <button class="btn" onclick="document.getElementById('settings-overlay').style.display='none'">Close</button>
+    </div>
+</div>
+
+<div class="hud">
+    <div style="font-weight:700; color:#fff;">✂ LocalCut</div>
+    <button class="btn" style="padding:4px 8px; margin-left:10px;" onclick="toggleSettings()" title="Settings">⚙️</button>
+    <button class="btn" style="padding:4px 8px; margin-left:4px;" onclick="showHelp()" title="Help">?</button>
+    <div class="sep"></div>
+    <span id="filename" style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff;">No File</span>
+    
+    <div style="flex:1"></div> <span class="stat" id="time">0:00.0</span>
+    <button class="btn" onclick="chSpd(-0.25)">-</button>
+    <span class="stat" id="spd" style="min-width:40px">1.0x</span>
+    <button class="btn" onclick="chSpd(0.25)">+</button>
+</div>
+
+<div class="vid-container">
+    <video id="v" controls playsinline></video>
+</div>
+
+<div id="editor">
+    <div class="sec-header">
+        <div style="display:flex; gap:15px; align-items:center;">
+            <span>Segments</span>
+            <div style="display:flex; gap:8px; font-size:11px; color:#777; border-left:1px solid #333; padding-left:12px;">
+                <span title="Set Start Time"><span class="kbd">I</span> In</span>
+                <span title="Set End Time"><span class="kbd">O</span> Out</span>
+                <span title="Play/Pause"><span class="kbd">Space</span> Play</span>
+                <span title="Add Segment"><span class="kbd">Enter</span> Add</span>
+            </div>
+        </div>
+        <div style="font-size:10px; color:#555; margin-left:auto; margin-right:15px;" title="Segments with the same name will be merged into one file">
+            (Same Name = Merged)
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn" onclick="generateCmd()">Show Cmd</button>
+            <button class="btn btn-primary" id="btn-cut" onclick="processWasm()">✂ Cut Now</button>
+        </div>
+    </div>
+    <div class="sec-list" id="sec-list"></div>
+</div>
+
+<script>
+// --- CORE ---
+const vid = document.getElementById('v');
+let fileObj = null; 
+let sections = [];
+let draft = { start: 0, end: 0, name: '' };
+let ffmpeg = null;
+let settings = { rot: 0, crf: 23, scale: 1.0, meta: true, cuda: false };
+
+// --- INIT ---
+function init() {
+    renderSections();
+    setDefaultName();
+}
+
+function toggleSettings() {
+    const el = document.getElementById('settings-overlay');
+    el.style.display = el.style.display === 'block' ? 'none' : 'block';
+}
+
+async function showHelp() {
+    const el = document.getElementById('help-overlay');
+    const content = document.getElementById('help-content');
+    el.style.display = 'grid';
+    
+    if(!content.innerHTML) {
+        content.innerHTML = "Loading...";
+        try {
+            const res = await fetch('README.md');
+            const md = await res.text();
+            content.innerHTML = marked.parse(md);
+        } catch(e) {
+            console.error(e);
+            content.innerHTML = "Error loading help.";
+        }
+    }
+}
+
+function updateSettings() {
+    settings.rot = parseInt(document.getElementById('opt-rot').value);
+    settings.crf = parseInt(document.getElementById('opt-crf').value);
+    settings.scale = parseFloat(document.getElementById('opt-scale').value);
+    settings.meta = document.getElementById('opt-meta').checked;
+    settings.cuda = document.getElementById('opt-cuda').checked;
+}
+
+// --- DRAG & DROP ---
+const drop = document.getElementById('drop');
+window.ondragenter = () => drop.style.display = 'grid';
+window.ondragleave = e => { if (!e.relatedTarget) drop.style.display = 'none'; };
+window.ondragover = e => e.preventDefault();
+window.ondrop = e => {
+    e.preventDefault(); drop.style.display = 'none';
+    if (!e.dataTransfer.files.length) return;
+    loadVideo(e.dataTransfer.files[0]);
+};
+
+function loadVideo(file) {
+    fileObj = file;
+    document.getElementById('filename').innerText = file.name;
+    
+    // Revoke old to prevent mem leak
+    if (vid.src) URL.revokeObjectURL(vid.src);
+    vid.src = URL.createObjectURL(file);
+    vid.load();
+    
+    // Reset
+    sections = [];
+    draft = { start: 0, end: 0, name: '' };
+
+    // Restore from LS
+    const key = `lc_cut_${file.name}_${file.size}`;
+    try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            
+            // Handle legacy (array) and new (object) format
+            if (Array.isArray(parsed)) {
+                sections = parsed;
+            } else if (parsed && Array.isArray(parsed.sections)) {
+                sections = parsed.sections;
+                if (parsed.draft) draft = parsed.draft;
+            }
+            const hasDraft = draft && (draft.start > 0 || draft.end > 0);
+            if (sections.length > 0 || hasDraft) {
+                showToast(`Restored ${sections.length} segments${hasDraft ? ' + draft' : ''}`);
+            }
+        }
+    } catch(e) { console.warn("LS Error", e); }
+    
+    if(!draft.name) setDefaultName();
+    renderSections();
+}
+
+function save() {
+    if (!fileObj) return;
+    const key = `lc_cut_${fileObj.name}_${fileObj.size}`;
+    const data = {
+        sections: sections,
+        draft: draft
+    };
+    localStorage.setItem(key, JSON.stringify(data));
+}
+
+function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.innerText = msg;
+    t.className = "show";
+    setTimeout(() => t.className = "", 2500);
+}
+
+// --- PLAYER CONTROLS ---
+vid.ontimeupdate = () => document.getElementById('time').innerText = fmt(vid.currentTime);
+function fmt(s) {
+    if (s < 0) return '--';
+    const m = Math.floor(s / 60);
+    const rs = (s % 60).toFixed(1);
+    return `${m}:${rs.toString().padStart(4, '0')}`;
+}
+function chSpd(delta) {
+    let s = Math.max(0.25, vid.playbackRate + delta);
+    vid.playbackRate = s;
+    document.getElementById('spd').innerText = s + 'x';
+}
+
+// --- EDIT LOGIC ---
+function updateSec(i, field, val) {
+    if (field === 'name') sections[i].name = val;
+    else sections[i][field] = parseFloat(val);
+    save();
+}
+function deleteSec(i) {
+    sections.splice(i, 1);
+    save();
+    setDefaultName();
+    renderSections();
+}
+function updateDraft(field, val) {
+    if (field === 'name') draft.name = val;
+    else draft[field] = parseFloat(val);
+    save(); 
+    renderSections(); 
+}
+function setDraftTime(field) {
+    if(!vid.src) return;
+    draft[field] = parseFloat(vid.currentTime.toFixed(3));
+    save();
+    renderSections();
+}
+function setDefaultName() {
+    draft.name = (sections.length + 1).toString();
+}
+
+function commitDraft() {
+    if (draft.end <= draft.start) return; 
+    if (!draft.name.trim()) setDefaultName();
+    
+    sections.push({ ...draft });
+    
+    // Auto-advance
+    draft.start = parseFloat(vid.currentTime.toFixed(3)); 
+    draft.end = 0; 
+    setDefaultName();
+    
+    save();
+    renderSections();
+    
+    setTimeout(() => {
+        const list = document.getElementById('sec-list');
+        list.scrollTop = list.scrollHeight;
+    }, 10);
+}
+
+// --- HELPER: GET ALL VALID SEGMENTS ---
+function getAllSegments() {
+    const all = [...sections];
+    // Include draft ONLY if it has valid duration (End > Start)
+    if (draft.end > draft.start) {
+        let dName = draft.name.trim() || (all.length + 1).toString();
+        all.push({ ...draft, name: dName });
+    }
+    return all.filter(s => s.end > s.start);
+}
+
+function getSegmentGroups() {
+    const valid = getAllSegments();
+    const groups = {};
+    valid.forEach(s => {
+        const name = s.name.trim() || "untitled";
+        if (!groups[name]) groups[name] = [];
+        groups[name].push(s);
+    });
+    return groups;
+}
+
+// --- RENDER ---
+function renderSections() {
+    const list = document.getElementById('sec-list');
+    list.innerHTML = '';
+    
+    sections.forEach((s, i) => {
+        const row = document.createElement('div');
+        row.className = 'sec-row';
+        row.innerHTML = buildRowHTML(i, s, false);
+        list.appendChild(row);
+    });
+
+    const draftRow = document.createElement('div');
+    draftRow.className = 'sec-row draft';
+    draftRow.innerHTML = buildRowHTML(-1, draft, true);
+    list.appendChild(draftRow);
+}
+
+function buildRowHTML(i, data, isDraft) {
+    const timeCtrl = (field, val) => {
+        const fnUpd = isDraft ? `updateDraft('${field}', this.value)` : `updateSec(${i}, '${field}', this.value)`;
+        const fnNow = isDraft ? `setDraftTime('${field}')` : `setTimeNow(${i}, '${field}')`;
+        const hotkey = (field === 'start') ? 'I' : 'O';
+        
+        return `
+        <div class="t-grp">
+            <button class="t-btn btn-play" onclick="playPoint(${val})" title="Play">▶</button>
+            <button class="t-btn" onclick="jumpTo(${val})" title="Jump">➜</button>
+            <button class="t-btn active-icon" onclick="${fnNow}" title="Set Now (Hotkey: ${hotkey})">⌖</button>
+            <input type="number" class="t-input" step="0.1" value="${val}" onchange="${fnUpd}">
+        </div>`;
+    };
+
+    const startHtml = timeCtrl('start', data.start);
+    const endHtml   = timeCtrl('end', data.end);
+    
+    const nameFn = isDraft ? `updateDraft('name', this.value)` : `updateSec(${i}, 'name', this.value)`;
+    const nameHtml = `<input type="text" class="name-input" value="${data.name}" onchange="${nameFn}" placeholder="Name">`;
+
+    let actBtn = isDraft 
+        ? `<button class="act-btn act-add" onclick="commitDraft()" title="Add Segment (Enter)">＋</button>`
+        : `<button class="act-btn act-del" onclick="deleteSec(${i})" title="Remove">×</button>`;
+
+    return `${startHtml} <span style="color:#444; font-size:10px;">➔</span> ${endHtml} ${nameHtml} ${actBtn}`;
+}
+
+// --- UTILS ---
+function jumpTo(val) { vid.currentTime = val; }
+function playPoint(val) { vid.currentTime = val; vid.play(); }
+function setTimeNow(i, field) {
+    sections[i][field] = parseFloat(vid.currentTime.toFixed(3));
+    save();
+    renderSections();
+}
+
+// --- HOTKEYS ---
+window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    const key = e.key.toLowerCase();
+    switch(key) {
+        case ' ': 
+            e.preventDefault(); 
+            vid.paused ? vid.play() : vid.pause(); 
+            break;
+        case 'i': setDraftTime('start'); break;
+        case 'o': setDraftTime('end'); break;
+        case 'enter': commitDraft(); break;
+        case 'arrowleft': vid.currentTime -= 5; break;
+        case 'arrowright': vid.currentTime += 5; break;
+    }
+});
+
+// --- PROCESSING ---
+function getFilterData(validSegs) {
+    if (!validSegs.length) return null;
+    let filter = "";
+    let map = "";
+    
+    // 1. Trim & Concat
+    validSegs.forEach((seg, i) => {
+        filter += `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS[v${i}];`;
+        filter += `[0:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS[a${i}];`;
+        map += `[v${i}][a${i}]`;
+    });
+    filter += `${map}concat=n=${validSegs.length}:v=1:a=1[catv][cata];`;
+
+    // 2. Post-processing filters (Scale, Rotate)
+    let videoFilters = [];
+    if (settings.scale !== 1.0) videoFilters.push(`scale=iw*${settings.scale}:-1`);
+    
+    if (settings.rot === 90) videoFilters.push("transpose=1");
+    else if (settings.rot === 180) videoFilters.push("transpose=2,transpose=2");
+    else if (settings.rot === 270) videoFilters.push("transpose=2");
+
+    if (videoFilters.length > 0) {
+        filter += `[catv]${videoFilters.join(',')}[outv]`;
+    } else {
+        filter += `[catv]null[outv]`;
+    }
+
+    return { filter, map: "[outv][cata]" };
+}
+
+function showLog(text, isCmd = false) {
+    const ol = document.getElementById('log-overlay');
+    const content = document.getElementById('log-content');
+    ol.style.display = 'block';
+    content.textContent = text;
+    document.getElementById('copy-btn').textContent = isCmd ? "Copy Command" : "Copy Log";
+}
+
+function copyLog() {
+    navigator.clipboard.writeText(document.getElementById('log-content').textContent);
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = "Copy", 1000);
+}
+
+function generateCmd() {
+    const groups = getSegmentGroups();
+    const keys = Object.keys(groups);
+    if (!fileObj || !keys.length) return alert("No valid sections (End > Start).");
+    
+    let fullLog = "";
+
+    keys.forEach(name => {
+        const segs = groups[name];
+        const d = getFilterData(segs);
+        
+        // Video Encoder
+        let vEnc = `-c:v libx264 -crf ${settings.crf} -preset fast`;
+        if (settings.cuda) {
+            vEnc = `-c:v h264_nvenc -cq ${settings.crf} -preset p4`;
+        }
+
+        // Metadata
+        const meta = settings.meta ? "-map_metadata 0" : "-map_metadata -1";
+        
+        const safeName = name.replace(/[^a-z0-9]/gi, '_');
+        const outName = `cut_${fileObj.name}_${safeName}.mp4`;
+
+        const cmd = `ffmpeg -i "${fileObj.name}" -filter_complex "${d.filter}" -map "${d.map.split('][')[0]}]" -map "[${d.map.split('][')[1]}" ${vEnc} -c:a aac -b:a 192k ${meta} "${outName}"`;
+        fullLog += `# Group: ${name}\n${cmd}\n\n`;
+    });
+
+    showLog(fullLog.trim(), true);
+}
+
+// FFmpeg WASM
+async function processWasm() {
+    const validSegs = getAllSegments();
+    if (!fileObj || !validSegs.length) return alert("No valid sections (End > Start).");
+    
+    const btn = document.getElementById('btn-cut');
+    const originalText = btn.innerHTML;
+    const logDiv = document.getElementById('log-content');
+    const logOverlay = document.getElementById('log-overlay');
+    
+    const log = (msg) => {
+        logDiv.textContent += msg + "\n";
+        logDiv.scrollTop = logDiv.scrollHeight;
+    };
+
+    try {
+        btn.disabled = true;
+        btn.innerHTML = "⏳ Load...";
+        logOverlay.style.display = 'block';
+        logDiv.textContent = "--- Initializing FFmpeg WASM ---\n";
+
+        // FIX: Check for global var FFmpegWASM which UMD 0.12.x often uses
+        const FFmpegClass = window.FFmpegWASM?.FFmpeg || window.FFmpeg;
+        const fetchFileFn = window.FFmpegUtil?.fetchFile || window.fetchFile;
+        const toBlobURL = window.FFmpegUtil?.toBlobURL || window.toBlobURL;
+
+        if (!FFmpegClass) throw new Error("FFmpeg library not loaded. Check internet.");
+        
+        // WARN: COOP/COEP for php -S
+        if (!window.crossOriginIsolated) {
+            log("\n⚠️ WARNING: 'crossOriginIsolated' is false. WASM will likely fail.");
+            log("Use 'Show Cmd' or add headers:\nCross-Origin-Opener-Policy: same-origin\nCross-Origin-Embedder-Policy: require-corp\n");
+        }
+
+        if (!ffmpeg) {
+            ffmpeg = new FFmpegClass();
+            ffmpeg.on('log', ({ message }) => log(message));
+            ffmpeg.on('progress', ({ progress }) => {
+                btn.innerHTML = `Running ${(progress * 100).toFixed(0)}%`;
+            });
+
+            // FIX: Load both CORE and WORKER via Blob URLs to bypass CDN Worker restrictions
+            
+            await ffmpeg.load({
+                coreURL: await toBlobURL(`lib/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`lib/ffmpeg-core.wasm`, 'application/wasm'),
+                // This explicitly loads the worker script (814.ffmpeg.js) as a local Blob
+                workerURL: await toBlobURL(`lib/814.ffmpeg.js`, 'text/javascript')
+            });
+        }
+
+        btn.innerHTML = "📥 Write...";
+        log("Writing file...");
+        await ffmpeg.writeFile(fileObj.name, await fetchFileFn(fileObj));
+
+        const groups = getSegmentGroups();
+        const keys = Object.keys(groups);
+        
+        const ext = fileObj.name.split('.').pop();
+        const baseName = fileObj.name.substring(0, fileObj.name.lastIndexOf('.'));
+
+        for (let i = 0; i < keys.length; i++) {
+            const name = keys[i];
+            const segs = groups[name];
+            
+            btn.innerHTML = `⚙️ Group ${i+1}/${keys.length}`;
+            log(`Processing group '${name}' (${segs.length} segments)...`);
+
+            const d = getFilterData(segs);
+            const safeName = name.replace(/[^a-z0-9]/gi, '_');
+            const outName = `cut_${baseName}_${safeName}.${ext}`;
+
+            // Build args
+            const args = [
+                '-i', fileObj.name,
+                '-filter_complex', d.filter,
+                '-map', '[outv]', '-map', '[cata]',
+                '-c:v', 'libx264',
+                '-crf', settings.crf.toString(),
+                '-preset', 'ultrafast',
+                '-c:a', 'aac',
+            ];
+
+            if (settings.meta) args.push('-map_metadata', '0');
+            else args.push('-map_metadata', '-1');
+
+            args.push(outName);
+
+            await ffmpeg.exec(args);
+
+            log(`Reading output ${outName}...`);
+            const data = await ffmpeg.readFile(outName);
+
+            const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = outName;
+            a.click();
+            
+            // Small delay to ensure browser handles multiple downloads
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        
+        log("All Done!");
+        btn.innerHTML = "✅ Done";
+
+    } catch (e) {
+        console.error(e);
+        log("\nERROR: " + e.message);
+        if(e.message.includes("SharedArrayBuffer")) {
+             log("\nNOTICE: SharedArrayBuffer error. Server missing security headers (COOP/COEP).");
+        }
+    } finally {
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }, 2000);
+    }
+}
+
+init();
+</script>
+</body>
+</html>
