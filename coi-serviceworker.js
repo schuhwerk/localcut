@@ -1,5 +1,5 @@
 /*! coi-serviceworker v0.1.7 - Modified for PWA Caching */
-const CACHE_NAME = 'localcut-v1';
+const CACHE_NAME = 'localcut-2025-01-08-v1';
 const ASSETS = [
   './',
   'index.html',
@@ -23,6 +23,10 @@ if (typeof window === 'undefined') {
         event.waitUntil(
             caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
         );
+        // Notify clients about update
+        self.clients.matchAll().then(clients => {
+            clients.forEach(client => client.postMessage({ type: 'UPDATE_AVAILABLE' }));
+        });
     });
 
     self.addEventListener("activate", (event) => {
@@ -69,7 +73,8 @@ if (typeof window === 'undefined') {
 
         event.respondWith(
             (async () => {
-                let response = await caches.match(request);
+                const isLocal = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
+                let response = isLocal ? null : await caches.match(request);
                 let fetchedFromNetwork = false;
 
                 if (!response) {
@@ -85,7 +90,7 @@ if (typeof window === 'undefined') {
                 if (!response) return;
 
                 if (response.status === 0) {
-                    if (fetchedFromNetwork && request.method === 'GET') {
+                    if (fetchedFromNetwork && request.method === 'GET' && !isLocal) {
                         const cache = await caches.open(CACHE_NAME);
                         cache.put(request, response.clone());
                     }
@@ -107,7 +112,7 @@ if (typeof window === 'undefined') {
                     headers: newHeaders,
                 });
 
-                if (fetchedFromNetwork && request.method === 'GET' && response.status === 200) {
+                if (fetchedFromNetwork && request.method === 'GET' && response.status === 200 && !isLocal) {
                     const cache = await caches.open(CACHE_NAME);
                     cache.put(request, processedResponse.clone());
                 }

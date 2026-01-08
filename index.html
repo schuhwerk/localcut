@@ -2,8 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>LocalCut</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="app-version" content="2025-01-08-v1">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="manifest" href="manifest.json">
 <script src="coi-serviceworker.js"></script>
@@ -16,6 +19,13 @@
 
 <div id="drop" class="overlay"><h1>Drop File</h1></div>
 <div id="toast"></div>
+<div id="update-toast" style="display:none; position: fixed; bottom: 20px; right: 20px; background: var(--pnl); border: 1px solid var(--brd); padding: 15px; border-radius: 8px; z-index: 200; box-shadow: 0 10px 25px rgba(0,0,0,0.5); flex-direction: column; gap: 10px;">
+    <span style="color: #fff; font-weight: 500;">Update Available</span>
+    <div class="f-row">
+        <button class="btn btn-p" onclick="window.location.reload()">Reload</button>
+        <button class="btn" onclick="$('update-toast').style.display='none'">Dismiss</button>
+    </div>
+</div>
 
 <div id="log-ov" class="overlay">
     <div class="modal">
@@ -55,10 +65,11 @@
 
 <div class="hud f-row">
     <span style="font-weight:700; color:#fff">✂</span>
-    <button class="btn btn-icon" onclick="$('sets-ov').style.display='flex'">⚙️</button>
-    <button class="btn btn-icon" onclick="showHelp()">?</button>
+    <button class="btn btn-icon" onclick="$('sets-ov').style.display='flex'" title="Settings">⚙️</button>
+    <button class="btn btn-icon" onclick="showHelp()" title="Help">?</button>
+    <button class="btn btn-icon" id="b-close" onclick="closeVideo()" title="Close Video" style="display:none">×</button>
     
-    <div class="f-grow f-col" style="align-items:center; justify-content:center">
+    <div class="f-grow f-col" style="justify-content:center">
         <div class="fname" id="fname">No File Loaded</div>
         <span class="keys">[Space] Play/Pause &nbsp; [I] In &nbsp; [O] Out &nbsp; [Enter] Add</span>
     </div>
@@ -96,17 +107,43 @@ const $ = id => document.getElementById(id);
 const vid = $('v');
 let file = null, secs = [], draft = {s:0, e:0, n:''}, ffmpeg = null;
 
+// UPDATE CHECK
+if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener('message', e => {
+        if (e.data && e.data.type === 'UPDATE_AVAILABLE') {
+            $('update-toast').style.display = 'flex';
+        }
+    });
+}
+
 // INIT & DRAG/DROP
 window.ondragenter = () => $('drop').style.display = 'flex';
 window.ondragleave = e => { if(!e.relatedTarget) $('drop').style.display = 'none'; };
 window.ondragover = e => e.preventDefault();
 window.ondrop = e => { e.preventDefault(); $('drop').style.display='none'; if(e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); };
 
+function closeVideo() {
+    if(!file) return;
+    file = null;
+    vid.pause();
+    vid.removeAttribute('src'); // Clear source
+    vid.load(); // Force unload
+    vid.style.display = 'none';
+    $('b-close').style.display = 'none';
+    $('empty').style.display = 'flex';
+    $('fname').innerText = 'No File Loaded';
+    $('tm').innerText = '0:00';
+    secs = []; 
+    draft = {s:0, e:0, n:''};
+    render();
+}
+
 function load(f) {
     file = f;
     $('fname').innerText = f.name;
     $('empty').style.display = 'none';
     vid.style.display = 'block';
+    $('b-close').style.display = 'flex';
     if(vid.src) URL.revokeObjectURL(vid.src);
     vid.src = URL.createObjectURL(f);
     
