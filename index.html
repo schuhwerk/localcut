@@ -234,8 +234,13 @@
     <button class="btn" onclick="chSpd(0.25)">+</button>
 </div>
 
-<div class="vid-container">
-    <video id="v" controls playsinline></video>
+<div class="vid-container" id="vid-con">
+    <div id="empty-state" style="display:flex; flex-direction:column; align-items:center; gap:20px; color:#555;">
+        <div style="font-size:24px; font-weight:300;">Drop your video-file here</div>
+        <button class="btn" onclick="document.getElementById('file-input').click()" style="padding:10px 20px; font-size:14px;">Or Click to Open</button>
+        <input type="file" id="file-input" accept="video/*" style="display:none" onchange="if(this.files.length) loadVideo(this.files[0])">
+    </div>
+    <video id="v" controls playsinline style="display:none"></video>
 </div>
 
 <div id="editor">
@@ -321,6 +326,10 @@ function loadVideo(file) {
     fileObj = file;
     document.getElementById('filename').innerText = file.name;
     
+    // UI Toggle
+    document.getElementById('empty-state').style.display = 'none';
+    vid.style.display = 'block';
+
     // Revoke old to prevent mem leak
     if (vid.src) URL.revokeObjectURL(vid.src);
     vid.src = URL.createObjectURL(file);
