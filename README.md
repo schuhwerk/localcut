@@ -20,6 +20,15 @@ A browser-based video snipping tool powered by FFmpeg WASM.
    - Click "Show Cmd" to generate FFmpeg commands for local execution.
    - Enable "CUDA" in Settings (⚙️) to generate commands with NVENC flags (fast!).
 
+## Hotkeys
+
+| Key | Action |
+|---|---|
+| `Space` | Play / Pause |
+| `I` | Set In Point |
+| `O` | Set Out Point |
+| `Enter` | Add Segment |
+
 ## Notes
 
 - **CUDA/GPU**: Not supported in browser (WASM is CPU-only). Use "Show Cmd" to run with GPU locally.
