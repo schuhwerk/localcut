@@ -1,8 +1,42 @@
-/*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
+/*! coi-serviceworker v0.1.7 - Modified for PWA Caching */
+const CACHE_NAME = 'localcut-v1';
+const ASSETS = [
+  './',
+  'index.html',
+  'style.css',
+  'favicon.svg',
+  'manifest.json',
+  'coi-serviceworker.js',
+  'lib/ffmpeg.js',
+  'lib/ffmpeg-util.js',
+  'lib/marked.js',
+  'lib/ffmpeg-core.js',
+  'lib/ffmpeg-core.wasm',
+  'lib/814.ffmpeg.js'
+];
+
 let coepCredentialless = false;
+
 if (typeof window === 'undefined') {
-    self.addEventListener("install", () => self.skipWaiting());
-    self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+    self.addEventListener("install", (event) => {
+        self.skipWaiting();
+        event.waitUntil(
+            caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+        );
+    });
+
+    self.addEventListener("activate", (event) => {
+        event.waitUntil(
+            Promise.all([
+                self.clients.claim(),
+                caches.keys().then((keys) => Promise.all(
+                    keys.map((key) => {
+                        if (key !== CACHE_NAME) return caches.delete(key);
+                    })
+                ))
+            ])
+        );
+    });
 
     self.addEventListener("message", (ev) => {
         if (!ev.data) {
@@ -32,29 +66,54 @@ if (typeof window === 'undefined') {
                 credentials: "omit",
             })
             : r;
+
         event.respondWith(
-            fetch(request)
-                .then((response) => {
-                    if (response.status === 0) {
-                        return response;
-                    }
+            (async () => {
+                let response = await caches.match(request);
+                let fetchedFromNetwork = false;
 
-                    const newHeaders = new Headers(response.headers);
-                    newHeaders.set("Cross-Origin-Embedder-Policy",
-                        coepCredentialless ? "credentialless" : "require-corp"
-                    );
-                    if (!coepCredentialless) {
-                        newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
+                if (!response) {
+                    try {
+                        response = await fetch(request);
+                        fetchedFromNetwork = true;
+                    } catch (e) {
+                        console.error(e);
+                        return;
                     }
-                    newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
+                }
 
-                    return new Response(response.body, {
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: newHeaders,
-                    });
-                })
-                .catch((e) => console.error(e))
+                if (!response) return;
+
+                if (response.status === 0) {
+                    if (fetchedFromNetwork && request.method === 'GET') {
+                        const cache = await caches.open(CACHE_NAME);
+                        cache.put(request, response.clone());
+                    }
+                    return response;
+                }
+
+                const newHeaders = new Headers(response.headers);
+                newHeaders.set("Cross-Origin-Embedder-Policy",
+                    coepCredentialless ? "credentialless" : "require-corp"
+                );
+                if (!coepCredentialless) {
+                    newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
+                }
+                newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
+
+                const processedResponse = new Response(response.body, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: newHeaders,
+                });
+
+                if (fetchedFromNetwork && request.method === 'GET' && response.status === 200) {
+                    const cache = await caches.open(CACHE_NAME);
+                    cache.put(request, processedResponse.clone());
+                }
+
+                return processedResponse;
+            })()
         );
     });
 
